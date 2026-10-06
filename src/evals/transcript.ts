@@ -1,12 +1,6 @@
-export interface Turn {
-  role: "user" | "assistant";
-  content: string;
-}
+import type { Turn } from "../chat.js";
 
-/**
- * The CLI takes one prompt, not a list of messages, so a conversation is sent
- * as a labelled transcript inside that prompt.
- */
+/** Writes a conversation out as labelled lines, e.g. for a judge to read. */
 export function formatTranscript(
   turns: readonly Turn[],
   labels: { user: string; assistant: string } = { user: "USER", assistant: "ASSISTANT" },

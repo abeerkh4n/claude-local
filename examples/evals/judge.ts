@@ -2,9 +2,10 @@
  * LLM-as-judge: grade three candidate replies against facts and criteria.
  * The judge runs on Opus through your subscription, so grading costs no API credit.
  *
- *   npx tsx examples/02-judge.ts
+ *   npx tsx examples/evals/judge.ts
  */
-import { createClaude, judge } from "../src/index.js";
+import { judge } from "../../src/evals/index.js";
+import { createClaude } from "../../src/index.js";
 
 const client = createClaude({ concurrency: 3 });
 

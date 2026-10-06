@@ -3,9 +3,9 @@
  * Checks this machine end to end: CLI installed, signed in with a Claude
  * subscription, and one real call answered.
  *
- *   npx claude-cli-evals        (or npm run doctor inside this repo)
+ *   npx claude-local        (or npm run doctor inside this repo)
  */
-import { runClaude } from "./cli.js";
+import { runOnce } from "./process.js";
 import { claudeStatus, isSubscription } from "./status.js";
 
 function ok(line: string) {
@@ -32,9 +32,15 @@ async function main() {
     console.log("· ANTHROPIC_API_KEY is set in this shell. It is removed from every call, so it is never billed.");
   }
 
-  const result = await runClaude({ model: "haiku", prompt: "Reply with the single word OK." });
+  const result = await runOnce("Reply with the single word OK.", { model: "haiku" });
   const seconds = (result.durationMs / 1000).toFixed(1);
   ok(`Test call: "${result.text.trim()}" from ${result.model} in ${seconds} s ($${result.apiCostUsd.toFixed(4)} at API prices, not billed)`);
+
+  const limit = result.rateLimit;
+  if (limit) {
+    const resets = limit.resetsAt ? `, resets ${limit.resetsAt.toLocaleString()}` : "";
+    ok(`Usage window (${limit.window ?? "current"}): ${limit.status}${resets}`);
+  }
 }
 
 main().catch((err: unknown) => fail(err instanceof Error ? err.message : String(err)));

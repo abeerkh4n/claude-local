@@ -1,5 +1,5 @@
-import type { Effort } from "./cli.js";
-import { defaultClient, type ClaudeClient } from "./client.js";
+import type { Effort } from "../cli.js";
+import { claude, type Claude } from "../client.js";
 
 export interface JudgeOptions {
   /** Each one is graded met / not met on its own. */
@@ -16,7 +16,7 @@ export interface JudgeOptions {
   model?: string;
   /** How hard the judge thinks before grading. Leave unset for the model's default. */
   effort?: Effort;
-  client?: ClaudeClient;
+  client?: Claude;
 }
 
 export interface CriterionResult {
@@ -71,14 +71,13 @@ interface RawVerdict {
 
 /** LLM-as-judge on your Claude subscription. */
 export async function judge(options: JudgeOptions): Promise<Verdict> {
-  const { criteria, passMark = 7, model = "opus", effort, client = defaultClient() } = options;
+  const { criteria, passMark = 7, model = "opus", effort, client = claude } = options;
   if (!criteria.length) throw new Error("judge() needs at least one criterion");
 
-  const result = await client.run<RawVerdict>({
+  const result = await client.run<RawVerdict>(judgePrompt(options), {
     model,
     effort,
     system: JUDGE_SYSTEM,
-    prompt: judgePrompt(options),
     jsonSchema: VERDICT_SCHEMA,
   });
   const raw = result.data;

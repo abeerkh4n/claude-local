@@ -1,0 +1,56 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 615 >>
+stream
+BT
+/F1 11 Tf
+50 760 Td
+/F1 18 Tf (Fresh Produce Co - TAX INVOICE) Tj
+0 -20 Td
+/F1 11 Tf (Invoice INV-20419    Date: 2 Oct 2026    Due: 16 Oct 2026) Tj
+0 -20 Td
+/F1 11 Tf (Bill to: Harbour Kitchen, 12 Wharf St) Tj
+0 -20 Td
+/F1 11 Tf () Tj
+0 -20 Td
+/F1 11 Tf (Roma tomatoes        10 kg      @ $4.20     $42.00) Tj
+0 -20 Td
+/F1 11 Tf (Basil                 6 bunches @ $3.50     $21.00) Tj
+0 -20 Td
+/F1 11 Tf (Buffalo mozzarella    4 kg      @ $24.00    $96.00) Tj
+0 -20 Td
+/F1 11 Tf () Tj
+0 -20 Td
+/F1 11 Tf (Subtotal  $159.00) Tj
+0 -20 Td
+/F1 11 Tf (GST       $15.90) Tj
+0 -22 Td
+/F1 13 Tf (TOTAL     $174.90) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000907 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+975
+%%EOF

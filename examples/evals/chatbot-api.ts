@@ -2,16 +2,19 @@
  * Test a chatbot over its HTTP API: a simulated guest talks to the endpoint,
  * then a judge grades the whole conversation.
  *
- *   npx tsx examples/03-chatbot-api.ts
+ *   npx tsx examples/evals/chatbot-api.ts
  *
  * To test your real service, delete startDemoBot() and point BOT_URL at it,
  * changing askBot() to match its request and response shape. Only the
  * simulated guest and the judge use your subscription; your bot keeps
  * whatever model and API key it normally uses.
+ *
+ * In your own project: import from "claude-local" and "claude-local/evals".
  */
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createClaude, formatTranscript, judge, simulateConversation, type Turn } from "../src/index.js";
+import { formatTranscript, judge, simulateConversation } from "../../src/evals/index.js";
+import { createClaude, type Turn } from "../../src/index.js";
 
 const client = createClaude();
 
@@ -27,7 +30,7 @@ async function startDemoBot(): Promise<{ url: string; close: () => void }> {
     let body = "";
     for await (const chunk of req) body += chunk;
     const { messages } = JSON.parse(body) as { messages: Turn[] };
-    const reply = await client.text(`${formatTranscript(messages)}\n\nWrite the assistant's next reply only.`, {
+    const reply = await client.ask(`${formatTranscript(messages)}\n\nWrite the assistant's next reply only.`, {
       model: "haiku",
       system: BOT_PROMPT,
     });

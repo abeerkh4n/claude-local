@@ -1,195 +1,236 @@
-# claude-cli-evals
+# claude-local
 
-Run the LLM calls in your evals and tests through **your own signed-in Claude Code CLI**, so they count against your Claude subscription instead of an API key's credit.
+Use your **Claude subscription** from Node.js and TypeScript on your own machine, with no API key or API bill. You can ask questions, stream replies, get JSON back, send PDFs and images, and hold multi-turn chats.
 
-Good for the parts of testing that are plain text in, text out:
+It works through the Claude Code CLI you're already signed in to, so every call counts against your Pro, Max, Team or Enterprise plan instead of API credit.
 
-- **LLM-as-judge**: grading replies, summaries or whole transcripts against criteria
-- **Simulated users**: a model playing a customer against your chatbot or API
-- **Prompt regression checks**: a prompt run over a table of cases before you ship an edit
-- One-off jobs on your machine: summarising logs, generating test data, structured extraction
+```ts
+import { claude } from "claude-local";
 
-At Forktime this moved the simulated caller and the judge in our voice-agent evals off the API key, which cut about a third of a ~$300/month eval bill.
+const answer = await claude.ask("Summarise this supplier email in two lines: ...");
+```
 
-> **Use it on your own machine, signed in as yourself, for your own development and testing.** Don't run it on servers or in CI, don't share one login between people, and don't put it behind an API for others to call. Those uses need an API key. Read Anthropic's [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) and [Usage Policy](https://www.anthropic.com/legal/aup) if you're unsure.
+> **Your machine, your login, your work.** It's for scripts and tools you run yourself. Don't run it on servers or in CI, don't share a login between people, and don't put it behind an API or app that other people use; those need an API key. If you're unsure, read Anthropic's [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) and [Usage Policy](https://www.anthropic.com/legal/aup).
 
 ## Setup (5 minutes)
 
-**1. Node 20.19 or newer.**
+**1. Check you have Node 20.19 or newer.**
 
 ```bash
 node --version
 ```
 
-**2. Install Claude Code** (skip if `claude --version` already works):
+**2. Install Claude Code.** Skip this if `claude --version` already works.
 
 ```bash
 npm install -g @anthropic-ai/claude-code
 ```
 
-**3. Sign in with your Claude account** (Pro, Max, Team or Enterprise):
+**3. Sign in with your Claude account.**
 
 ```bash
 claude auth login
-claude auth status      # should show  "loggedIn": true  and  "authMethod": "claude.ai"
+claude auth status      # look for  "loggedIn": true  and  "authMethod": "claude.ai"
 ```
 
-If `authMethod` is anything other than `claude.ai`, you are signed in with an API (Console) account and calls would be billed to it. Run `claude auth logout` and sign in again with your Claude account.
+If `authMethod` shows anything other than `claude.ai`, you're signed in with an API (Console) account and calls would be billed. Run `claude auth logout` and sign in again with your Claude account.
 
-**4. Add the package to your project.** The repo is private, so your GitHub login needs access to it:
+**4. Add the package to your project.** The repo is private, so your GitHub login needs access to it.
 
 ```bash
-npm install -D github:abeerkh4n/claude-cli-evals
-# or: pnpm add -D github:abeerkh4n/claude-cli-evals
+npm install github:abeerkh4n/claude-local
+# or: pnpm add github:abeerkh4n/claude-local
 ```
 
-It builds itself on install.
+It builds itself when it installs. It's an ES module, so use `import`. CommonJS code can `require()` it on Node 20.19 or newer.
 
-**5. Check everything works:**
+**5. Check it works.**
 
 ```bash
-npx claude-cli-evals
+npx claude-local
 ```
 
 ```
 ✓ Claude Code CLI 2.1.49
 ✓ Signed in with a Claude subscription (max)
-✓ Test call: "OK" from claude-haiku-4-5-20251001 in 3.1 s ($0.0005 at API prices, not billed)
+✓ Test call: "OK" from claude-haiku-4-5-20251001 in 2.0 s ($0.0005 at API prices, not billed)
+✓ Usage window (five_hour): allowed, resets 10/7/2026, 4:10:00 AM
 ```
 
-You don't need to unset `ANTHROPIC_API_KEY`: the package removes it from every call (see [How it works](docs/how-it-works.md)).
+You don't need to unset `ANTHROPIC_API_KEY`. The package removes it from every call it makes.
 
-## Quick start
+## What you can do
+
+### Ask
 
 ```ts
-import { createClaude } from "claude-cli-evals";
+import { claude } from "claude-local";
 
-const claude = createClaude({ model: "haiku" });
-
-const answer = await claude.text("Summarise this complaint in one line: ...", {
-  system: "You are a support lead.",
+const text = await claude.ask("Three subject lines for our new brunch menu email", {
+  model: "haiku",                           // or "sonnet" (default), "opus", or a full model id
+  system: "You are a concise marketing writer.",
 });
-
-const { intent } = await claude.json<{ intent: string }>("can we move our 7pm to 8?", {
-  type: "object",
-  properties: { intent: { type: "string", enum: ["book", "change", "cancel"] } },
-  required: ["intent"],
-});
-
-console.log(claude.stats());
-// { calls: 2, failures: 0, retries: 0, apiCostUsd: 0.0031, avgMs: 4210 }
 ```
 
-`apiCostUsd` is what the calls *would* have cost on the API. You aren't charged it; it uses up your plan's usage limit instead.
+### Stream the reply as it's written
+
+```ts
+for await (const text of claude.stream("Draft a note to staff about the new roster")) {
+  process.stdout.write(text);
+}
+```
+
+### Get JSON back
+
+Pass a JSON Schema and you get the parsed object back.
+
+```ts
+const booking = await claude.json<{ name: string; guests: number; date: string }>(
+  `Extract the booking: "Hi, it's Morgan, table for 14 on Friday the 24th"`,
+  {
+    type: "object",
+    properties: { name: { type: "string" }, guests: { type: "integer" }, date: { type: "string" } },
+    required: ["name", "guests", "date"],
+  },
+);
+```
+
+### Send files
+
+Files can be PDFs, images (png, jpg, gif, webp) or text files.
+
+```ts
+const summary = await claude.ask("Who is this from and what do we owe?", {
+  files: ["./invoices/october.pdf"],
+});
+// Bytes you already have work too: files: [{ data: buffer, mediaType: "image/png" }]
+```
+
+### Chat
+
+```ts
+const chat = claude.chat({ system: "You are my writing assistant." });
+await chat.send("Draft a LinkedIn post about our second location opening.");
+await chat.send("Shorter, and less salesy.");        // it remembers the draft
+for await (const t of chat.stream("Now a version for Instagram")) process.stdout.write(t);
+await chat.close();
+```
+
+A chat stays in one Claude process. Claude sees the real conversation, and each reply after the first starts in about a second.
+
+### Lots of items at once
+
+```ts
+import { createClaude } from "claude-local";
+
+const claude = createClaude({ model: "haiku", concurrency: 6 });
+const tags = await Promise.all(reviews.map((r) => claude.json(`Tag this review: ${r}`, schema)));
+console.log(claude.stats()); // { calls, failures, retries, apiCostUsd, avgMs, rateLimit }
+```
+
+`apiCostUsd` is what the calls *would* have cost on the API. You aren't charged for it; it shows what you saved. The calls use up your plan's usage limit instead. `rateLimit` shows the state of that limit and when it resets.
 
 ## Examples
 
-Run any of these from a clone of this repo (`npm install` first):
+Clone the repo, run `npm install`, then:
 
-| Example | What it shows |
+| Run | Shows |
 | --- | --- |
-| [`01-hello.ts`](examples/01-hello.ts) | One call and its stats |
-| [`02-judge.ts`](examples/02-judge.ts) | An Opus judge grading three replies to an allergy question against menu facts |
-| [`03-chatbot-api.ts`](examples/03-chatbot-api.ts) | A simulated guest talks to a chatbot **over HTTP**, then a judge grades the transcript |
-| [`04-prompt-regression.ts`](examples/04-prompt-regression.ts) | A routing prompt run over six cases at once; exits 1 if any answer is wrong |
-| [`05-in-a-test.test.ts`](examples/05-in-a-test.test.ts) | The judge inside a Vitest suite, skipped unless `CLAUDE_CLI_LIVE=1` |
+| `npx tsx examples/01-ask.ts` | One question and its stats |
+| `npx tsx examples/02-stream.ts` | An email draft printed as it's written |
+| `npx tsx examples/03-extract-json.ts` | A messy enquiry email turned into typed JSON |
+| `npx tsx examples/04-files.ts [file]` | A PDF summarised and extracted. Uses the sample invoice, or your own file. |
+| `npx tsx examples/05-chat.ts` | A chat in your terminal |
+| `npx tsx examples/06-batch.ts` | Six reviews tagged at once, each with a suggested owner reply |
 
-```bash
-npx tsx examples/02-judge.ts
-npm run test:live
-```
+## API
 
-`03-chatbot-api.ts` usually **fails on purpose**. The demo bot's prompt never says not to book groups larger than 8, so the bot takes a phone number for the manager and then confirms the booking for 12 anyway. The judge catches that. This is what a useful failure looks like. To test your own service, replace the demo server with your real URL. Only the simulated guest and the judge use your subscription; your bot keeps its normal model and API key.
+| | |
+| --- | --- |
+| `claude` | A ready client with default settings. Nothing starts until the first call. |
+| `createClaude(options)` | A client with your own defaults: `model`, `system`, `effort`, `concurrency` (default 4), `retries` (default 1, only after a timeout or crash), `timeoutMs` (default 5 min). |
+| `client.ask(prompt, options)` | The reply text. `options`: `model`, `system`, `effort`, `files`, `jsonSchema`, `timeoutMs`, `signal`, `onText`. |
+| `client.json(prompt, schema, options)` | The reply parsed against a JSON Schema. |
+| `client.stream(prompt, options)` | Iterate for the text as it's written; `await stream.result` for the whole reply. |
+| `client.run(prompt, options)` | The full result: `{ text, data, apiCostUsd, durationMs, model, usage, rateLimit }`. |
+| `client.chat(options)` | A conversation with `send`, `stream`, `run`, `turns` and `close`. |
+| `client.stats()` | Running totals for this client. |
+| `claudeStatus()` / `assertSubscription()` | Whether the CLI is installed and signed in with a subscription. |
 
-### Judge
+Every call is independent unless you use `chat()`. Before its first call, a client checks once that the CLI is signed in with a subscription, and refuses to run otherwise. Pass `requireSubscription: false` to skip this check.
+
+Errors are `ClaudeCliError`. Check `err.kind` to see what went wrong:
+
+| `err.kind` | Meaning |
+| --- | --- |
+| `not_installed` | The `claude` command wasn't found. |
+| `auth` | Not signed in, or signed in without a subscription. |
+| `usage_limit` | You've hit your plan's limit. `stats().rateLimit.resetsAt` says when it resets. |
+| `timeout` | The call took longer than `timeoutMs`. |
+| `aborted` | The `signal` you passed was aborted. |
+| `cli_error` | The CLI reported an error, for example an unknown model. |
+| `exit` | The CLI process exited unexpectedly. |
+| `parse` | You asked for JSON and didn't get it. |
+| `closed` | You sent a message to a chat that was already closed. |
+
+**Models.** Aliases like `haiku`, `sonnet` and `opus` point to whatever your installed Claude Code version maps them to. For example, on 2.1.49 `opus` is Opus 4.6. Pass a full id such as `claude-opus-5` to pin a model. Newer models need a newer CLI, so run `claude update`.
+
+## Evals add-on
+
+There are also helpers for testing your own bots and prompts: an LLM judge and a simulated user.
 
 ```ts
-import { judge } from "claude-cli-evals";
+import { judge, simulateConversation } from "claude-local/evals";
 
 const verdict = await judge({
-  context: "Open Tuesday to Sunday, 5pm to 10pm. Closed Mondays.",
+  model: "claude-opus-5",
+  effort: "medium",
+  context: "Open Tuesday to Sunday. Closed Mondays.",
   input: "Guest: Can I book for Monday at 7?",
   output: botReply,
   criteria: ["Does not offer or confirm a Monday booking", "Suggests a day the restaurant is open"],
 });
-// { passed: true, score: 9, criteria: [{ criterion, met, reason }, ...], summary, apiCostUsd }
-```
-
-It passes only if every criterion is met **and** the score is at least `passMark` (default 7). It uses `opus` by default. To pin the judge so scores stay comparable between runs, pass a full model id and an effort:
-
-```ts
-await judge({ model: "claude-opus-5", effort: "medium", criteria, output });
-```
-
-Grading on your subscription costs no API money, so it is worth using the strongest judge. Opus does use your usage limit faster than Haiku.
-
-### Simulated user
-
-```ts
-import { simulateConversation } from "claude-cli-evals";
+// { passed, score, criteria: [{ criterion, met, reason }], summary, apiCostUsd }
 
 const sim = await simulateConversation({
-  persona: "You want a table for 4 on Friday at 8pm. Your name is Sam. You're polite but brief.",
-  greeting: "Hi, how can I help?",
-  respond: async (message, turns) => callMyBot(turns), // your system under test
-  maxTurns: 8,
+  persona: "You want a table for 4 on Friday at 8pm. You're polite but brief.",
+  respond: async (message, turns) => callMyBot(turns), // the system you're testing
 });
-// sim.turns: [{ role: "assistant" | "user", content }], sim.finished: the user said it was done
 ```
 
-The simulated user runs on `haiku` by default and ends the conversation itself when its goal is done.
+The eval examples are in [`examples/evals/`](examples/evals):
 
-## API
-
-| Function | Purpose |
+| Run | Shows |
 | --- | --- |
-| `createClaude(options)` | A client with a one-time login check, a concurrency limit (default 4), one retry after a timeout or crash, and running totals in `stats()`. Use this for evals. |
-| `client.run({ prompt, system, model, jsonSchema, effort, timeoutMs, signal })` | One call. Returns `{ text, data, apiCostUsd, durationMs, model, usage }`. |
-| `client.text(prompt, options)` / `client.json(prompt, schema, options)` | Shortcuts for text replies and schema-checked JSON replies. |
-| `judge(options)` | LLM-as-judge with per-criterion verdicts. |
-| `simulateConversation(options)` | A simulated user against your `respond` function. |
-| `formatTranscript(turns, labels)` | Turns a message list into the labelled transcript the CLI takes. |
-| `runClaude(options)` | The low-level call, with no login check, limit or retry. |
-| `claudeStatus()` / `assertSubscription()` | Whether the CLI is installed and signed in with a subscription. |
+| `npx tsx examples/evals/judge.ts` | A judge grading three replies |
+| `npx tsx examples/evals/chatbot-api.ts` | A simulated guest testing a chatbot over HTTP, graded at the end |
+| `npm run test:live` | The judge inside a Vitest suite |
 
-Errors are `ClaudeCliError`, and `err.kind` is one of the following:
-
-| `err.kind` | Meaning |
-| --- | --- |
-| `not_installed` | The `claude` command was not found. |
-| `auth` | Not signed in, or signed in without a subscription. |
-| `timeout` | The call took longer than `timeoutMs`. |
-| `aborted` | The `signal` you passed was aborted. |
-| `cli_error` | The CLI itself reported an error, such as a usage limit. This kind is never retried. |
-| `exit` | The CLI exited with an error code. |
-| `parse` | The reply could not be read as expected. |
-
-Models: use an alias (`haiku`, `sonnet`, `opus`) or a full id such as `claude-haiku-4-5`. An alias points to whatever model your installed Claude Code version maps it to; for example, `opus` on 2.1.49 is Opus 4.6. Pass a full id when you need the same model on every machine. Newer models need a newer CLI: run `claude update`.
+The chatbot example can pass or fail from one run to the next. The demo bot's prompt never says not to book big groups, so it sometimes confirms the booking for 12 anyway, and the judge catches that when it happens.
 
 ## Limits
 
-- **Text in, text out only.** You can't give the model your own tools. To test an agent that calls tools, run that agent on the API as usual, and use this package only for the user simulator and the judge around it.
-- **Fewer controls.** There is no temperature, max-tokens or prompt-caching setting. `effort` is available.
-- **Slower per call.** Each call starts a CLI process, which adds about 2–3 seconds. Typical times we saw: Haiku 3–8 s, Opus judge 8–15 s. Run calls side by side with `concurrency`.
-- **Shared usage limits.** Calls count against the same limits as your normal Claude and Claude Code use. A long eval run can use up your usage window. When that happens, calls fail with a `cli_error` that names the limit.
-- **One conversation is one prompt.** Message history is sent as a transcript inside the prompt, not as separate messages.
+- **Text, files and JSON only.** You can't give the model your own tools (function calling). If you need tool use, use the API.
+- **Fewer controls.** There's no temperature, max-tokens or prompt-caching setting. `effort` is available.
+- **About 2–3 seconds of startup per call.** Chats only pay it once. Run independent calls side by side to save time.
+- **Shared usage limits.** Calls count against the same limit as your Claude and Claude Code use, so a large batch can use up the current 5-hour window.
 
 ## Troubleshooting
 
 - **`Claude Code CLI not found`.** Install it (step 2), or pass `bin: "/path/to/claude"`.
 - **`not a Claude subscription`.** Run `claude auth logout`, then `claude auth login` with your Claude account.
-- **`Claude Code x.y.z does not support this model`.** Your CLI is older than the model. Run `claude update` (or `npm install -g @anthropic-ai/claude-code@latest`).
-- **Works in a terminal but not in your app.** Check that `PATH` in your app's environment includes the folder where `claude` is installed.
-- **Unexpected replies.** The CLI runs from an empty temp folder with no settings, tools or MCP servers loaded. If you see project rules leaking in, open an issue with your CLI version.
+- **`Claude Code x.y.z does not support this model`.** Your CLI is older than the model. Run `claude update`.
+- **Works in a terminal but not from your app.** The app's `PATH` must include the folder where `claude` is installed.
+- **`require() of ES Module`.** Use `import` (ESM), or Node 20.19+, which can `require()` it.
 
 ## Development
 
 ```bash
 npm install
-npm test          # unit tests; never start the CLI
+npm test          # unit tests; these never start the real CLI
 npm run typecheck
-npm run test:live # the live example test, on your subscription
+npm run test:live # live test on your subscription
 npm run doctor
 ```
 
-More detail on why each flag is there: [docs/how-it-works.md](docs/how-it-works.md).
+How it works, flag by flag: [docs/how-it-works.md](docs/how-it-works.md).

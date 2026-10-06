@@ -1,7 +1,8 @@
-import { defaultClient, type ClaudeClient } from "./client.js";
-import { formatTranscript, type Turn } from "./transcript.js";
+import type { Turn } from "../chat.js";
+import { claude, type Claude } from "../client.js";
 
 export const DONE = "<<DONE>>";
+export const OPENING = "(The conversation is starting. Write your first message.)";
 
 export interface SimulateOptions {
   /** Who the simulated user is and what they want, in plain words. */
@@ -14,7 +15,7 @@ export interface SimulateOptions {
   maxTurns?: number;
   /** Default "haiku". */
   model?: string;
-  client?: ClaudeClient;
+  client?: Claude;
 }
 
 export interface Simulation {
@@ -31,36 +32,42 @@ export function simulatorSystem(persona: string): string {
 WHO YOU ARE AND WHAT YOU WANT:
 ${persona}
 
+Each message you receive is exactly what the assistant just said to you. Reply with what you say back.
+
 RULES:
-- Write only what you say next. No stage directions, no quotation marks, no speaker label.
+- Write only what you say. No stage directions, no quotation marks, no speaker label.
 - Keep it short and natural, the way a real person writes.
 - Don't do the assistant's job: give details when asked, or when a real person would offer them.
 - When your goal is done, or it clearly can't be done, end your message with ${DONE}. A short goodbye before it is fine.`;
 }
 
-export function simulatorPrompt(turns: readonly Turn[]): string {
-  if (!turns.length) return "The conversation hasn't started. Write your first message.";
-  const transcript = formatTranscript(turns, { user: "YOU", assistant: "ASSISTANT" });
-  return `The conversation so far (YOU are you; ASSISTANT is who you are talking to):\n\n${transcript}\n\nWrite your next message.`;
-}
-
-/** Plays a simulated user against your system until the user is done or maxTurns runs out. */
+/**
+ * Plays a simulated user against your system until the user is done or
+ * maxTurns runs out. The simulated user is one chat, so it remembers the whole
+ * conversation.
+ */
 export async function simulateConversation(options: SimulateOptions): Promise<Simulation> {
-  const { persona, respond, greeting, maxTurns = 10, model = "haiku", client = defaultClient() } = options;
-  const system = simulatorSystem(persona);
+  const { persona, respond, greeting, maxTurns = 10, model = "haiku", client = claude } = options;
+  const user = client.chat({ model, system: simulatorSystem(persona) });
   const turns: Turn[] = greeting ? [{ role: "assistant", content: greeting }] : [];
+  let heard = greeting ?? OPENING;
   let apiCostUsd = 0;
 
-  for (let i = 0; i < maxTurns; i++) {
-    const result = await client.run({ model, system, prompt: simulatorPrompt(turns) });
-    apiCostUsd += result.apiCostUsd;
-    const { message, done } = splitDone(result.text);
-    if (message) turns.push({ role: "user", content: message });
-    if (done) return { turns, finished: true, apiCostUsd };
-    if (!message) return { turns, finished: false, apiCostUsd };
-    turns.push({ role: "assistant", content: await respond(message, turns) });
+  try {
+    for (let i = 0; i < maxTurns; i++) {
+      const result = await user.run(heard);
+      apiCostUsd += result.apiCostUsd;
+      const { message, done } = splitDone(result.text);
+      if (message) turns.push({ role: "user", content: message });
+      if (done) return { turns, finished: true, apiCostUsd };
+      if (!message) return { turns, finished: false, apiCostUsd };
+      heard = await respond(message, turns);
+      turns.push({ role: "assistant", content: heard });
+    }
+    return { turns, finished: false, apiCostUsd };
+  } finally {
+    await user.close();
   }
-  return { turns, finished: false, apiCostUsd };
 }
 
 export function splitDone(text: string): { message: string; done: boolean } {

@@ -1,16 +1,30 @@
-import { ClaudeCliError, runClaude, type RunOptions, type RunResult } from "./cli.js";
+import { ClaudeCliError, type ModelOptions, type ProcessOptions, type RateLimit, type RunResult } from "./cli.js";
+import { createChat, type Chat, type ChatOptions } from "./chat.js";
+import { toContent, type FileInput } from "./content.js";
+import { runOnce } from "./process.js";
 import { assertSubscription, claudeStatus, type ClaudeStatus } from "./status.js";
+import { textStream, type TextStream } from "./stream.js";
 
-export interface ClientOptions extends Omit<RunOptions, "prompt" | "signal"> {
+export interface CallOptions extends ModelOptions {
+  /** Images, PDFs or text files to send with the prompt: paths, or { data, mediaType }. */
+  files?: readonly FileInput[];
+  /** Longest the reply may take. Default 5 minutes. */
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  /** Called with each piece of reply text as it is written. */
+  onText?: (text: string) => void;
+}
+
+export interface ClientOptions extends ModelOptions, ProcessOptions {
   /** Calls running at once. Each is a separate CLI process. Default 4. */
   concurrency?: number;
-  /** Extra attempts after a timeout, a crash or unreadable output. Never after a CLI error such as a usage limit. Default 1. */
+  /** Extra attempts after a timeout, a crash or unreadable output. Never after a CLI error or a usage limit. Default 1. */
   retries?: number;
+  timeoutMs?: number;
   /** Check once, before the first call, that the CLI is signed in with a Claude subscription. Default true. */
   requireSubscription?: boolean;
-  /** Test seams. */
+  /** Test seam. */
   statusImpl?: () => ClaudeStatus;
-  runImpl?: <T>(options: RunOptions) => Promise<RunResult<T>>;
 }
 
 export interface ClientStats {
@@ -20,52 +34,79 @@ export interface ClientStats {
   /** Sum of what the calls would have cost on the API. Not billed. */
   apiCostUsd: number;
   avgMs: number;
+  /** The plan's usage window as of the latest call. */
+  rateLimit: RateLimit | undefined;
 }
 
-export interface ClaudeClient {
-  run<T = unknown>(options: RunOptions): Promise<RunResult<T>>;
-  /** The reply text. */
-  text(prompt: string, options?: Omit<RunOptions, "prompt">): Promise<string>;
-  /** The reply parsed against a JSON Schema. */
-  json<T = unknown>(prompt: string, jsonSchema: object, options?: Omit<RunOptions, "prompt" | "jsonSchema">): Promise<T>;
+export interface Claude {
+  /** One prompt, one reply. Each call is independent. */
+  ask(prompt: string, options?: CallOptions): Promise<string>;
+  /** The reply as JSON matching the schema, parsed. */
+  json<T = unknown>(prompt: string, jsonSchema: object, options?: Omit<CallOptions, "jsonSchema">): Promise<T>;
+  /** The reply text as it is written: `for await (const text of claude.stream(...))`. */
+  stream(prompt: string, options?: Omit<CallOptions, "onText">): TextStream;
+  /** Like ask(), with the full result: text, data, cost, time, model, usage. */
+  run<T = unknown>(prompt: string, options?: CallOptions): Promise<RunResult<T>>;
+  /** A multi-turn conversation that remembers what was said. */
+  chat(options?: ChatOptions): Chat;
   stats(): ClientStats;
 }
 
 const TRANSIENT = new Set(["timeout", "exit", "parse"]);
 
-export function createClaude(options: ClientOptions = {}): ClaudeClient {
+export function createClaude(options: ClientOptions = {}): Claude {
   const {
     concurrency = 4,
     retries = 1,
     requireSubscription = true,
     statusImpl = claudeStatus,
-    runImpl = runClaude,
     ...defaults
   } = options;
   const limit = createLimiter(concurrency);
   const tally = { calls: 0, failures: 0, retries: 0, apiCostUsd: 0, totalMs: 0 };
+  let rateLimit: RateLimit | undefined;
   let checked = false;
 
-  async function run<T = unknown>(callOptions: RunOptions): Promise<RunResult<T>> {
-    if (requireSubscription && !checked) {
-      assertSubscription(statusImpl());
-      checked = true;
-    }
-    const merged = withDefaults(defaults, callOptions);
+  const ensureLogin = () => {
+    if (!requireSubscription || checked) return;
+    assertSubscription(statusImpl());
+    checked = true;
+  };
+  const recordSuccess = (result: RunResult) => {
+    tally.calls += 1;
+    tally.apiCostUsd += result.apiCostUsd;
+    tally.totalMs += result.durationMs;
+    rateLimit = result.rateLimit ?? rateLimit;
+  };
+  const recordFailure = () => {
+    tally.failures += 1;
+  };
+
+  async function run<T = unknown>(prompt: string, callOptions: CallOptions = {}): Promise<RunResult<T>> {
+    ensureLogin();
+    const { files, onText, signal, ...rest } = callOptions;
+    const settings = withDefaults(defaults, rest);
+    const content = await toContent(prompt, files);
     return limit(async () => {
+      let wrote = false;
+      const forward = onText
+        ? (text: string) => {
+            wrote = true;
+            onText(text);
+          }
+        : undefined;
       for (let attempt = 0; ; attempt++) {
         try {
-          const result = await runImpl<T>(merged);
-          tally.calls += 1;
-          tally.apiCostUsd += result.apiCostUsd;
-          tally.totalMs += result.durationMs;
+          const result = await runOnce<T>(content, { ...settings, onText: forward, signal });
+          recordSuccess(result);
           return result;
         } catch (err) {
-          if (attempt < retries && isTransient(err)) {
+          // A retry after text has gone to the caller would repeat it.
+          if (attempt < retries && !wrote && isTransient(err)) {
             tally.retries += 1;
             continue;
           }
-          tally.failures += 1;
+          recordFailure();
           throw err;
         }
       }
@@ -74,26 +115,31 @@ export function createClaude(options: ClientOptions = {}): ClaudeClient {
 
   return {
     run,
-    text: async (prompt, callOptions) => (await run({ ...callOptions, prompt })).text,
-    json: async <T>(prompt: string, jsonSchema: object, callOptions?: Omit<RunOptions, "prompt" | "jsonSchema">) =>
-      (await run<T>({ ...callOptions, prompt, jsonSchema })).data as T,
+    ask: async (prompt, callOptions) => (await run(prompt, callOptions)).text,
+    json: async <T>(prompt: string, jsonSchema: object, callOptions?: Omit<CallOptions, "jsonSchema">) =>
+      (await run<T>(prompt, { ...callOptions, jsonSchema })).data as T,
+    stream: (prompt, callOptions) => textStream((onText) => run(prompt, { ...callOptions, onText })),
+    chat: (chatOptions = {}) =>
+      createChat({
+        settings: withDefaults(defaults, chatOptions),
+        limit,
+        ensureLogin,
+        recordSuccess,
+        recordFailure,
+      }),
     stats: () => ({
       calls: tally.calls,
       failures: tally.failures,
       retries: tally.retries,
       apiCostUsd: tally.apiCostUsd,
       avgMs: tally.calls ? Math.round(tally.totalMs / tally.calls) : 0,
+      rateLimit,
     }),
   };
 }
 
-let shared: ClaudeClient | undefined;
-
-/** The client judge() and simulateConversation() use when you don't pass one. */
-export function defaultClient(): ClaudeClient {
-  shared ??= createClaude();
-  return shared;
-}
+/** A ready client with the default settings. Nothing starts until the first call. */
+export const claude: Claude = createClaude();
 
 /** Runs at most `max` tasks at once; the rest wait in order. */
 export function createLimiter(max: number) {
@@ -122,12 +168,13 @@ export function createLimiter(max: number) {
   };
 }
 
-function withDefaults(defaults: Omit<RunOptions, "prompt" | "signal">, call: RunOptions): RunOptions {
-  const out: Record<string, unknown> = { ...defaults };
+/** Call options win over client defaults, except where the call leaves an option undefined. */
+function withDefaults<D extends object, C extends object>(defaults: D, call: C): D & C {
+  const out: Record<string, unknown> = { ...(defaults as Record<string, unknown>) };
   for (const [key, value] of Object.entries(call)) {
     if (value !== undefined) out[key] = value;
   }
-  return out as unknown as RunOptions;
+  return out as D & C;
 }
 
 function isTransient(err: unknown): boolean {

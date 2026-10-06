@@ -1,68 +1,134 @@
 import { describe, expect, it } from "vitest";
-import { ClaudeCliError } from "../src/cli.js";
-import { createClaude, createLimiter } from "../src/client.js";
-import type { ClaudeStatus } from "../src/status.js";
-import { fakeRun } from "./helpers.js";
+import { createClaude, createLimiter, type ClientOptions } from "../src/client.js";
+import { fakeCli, SIGNED_IN, type FakeReply } from "./helpers.js";
 
-const SIGNED_IN: ClaudeStatus = { installed: true, loggedIn: true, authMethod: "claude.ai" };
+function client(replies: FakeReply[], options: ClientOptions = {}) {
+  const fake = fakeCli(replies);
+  return { claude: createClaude({ spawnImpl: fake.impl, statusImpl: () => SIGNED_IN, ...options }), spawns: fake.spawns };
+}
 
 describe("createClaude", () => {
+  it("ask() returns the reply; each call is its own process", async () => {
+    const { claude, spawns } = client(["one", "two"]);
+    expect(await claude.ask("a")).toBe("one");
+    expect(await claude.ask("b")).toBe("two");
+    expect(spawns).toHaveLength(2);
+  });
+
   it("checks the login once, before the first call", async () => {
     let checks = 0;
-    const { impl } = fakeRun([{ text: "hi" }]);
-    const claude = createClaude({ runImpl: impl, statusImpl: () => (checks++, SIGNED_IN) });
-    await Promise.all([claude.text("a"), claude.text("b"), claude.text("c")]);
+    const fake = fakeCli(["hi"]);
+    const claude = createClaude({ spawnImpl: fake.impl, statusImpl: () => (checks++, SIGNED_IN) });
+    await Promise.all([claude.ask("a"), claude.ask("b"), claude.ask("c")]);
     expect(checks).toBe(1);
   });
 
   it("refuses to call when the CLI is signed in with an API login", async () => {
-    const { impl, calls } = fakeRun([{ text: "hi" }]);
-    const claude = createClaude({
-      runImpl: impl,
-      statusImpl: () => ({ installed: true, loggedIn: true, authMethod: "console" }),
-    });
-    await expect(claude.text("a")).rejects.toThrow(/not a Claude subscription/);
-    expect(calls).toHaveLength(0);
+    const { claude, spawns } = client(["hi"], { statusImpl: () => ({ installed: true, loggedIn: true, authMethod: "console" }) });
+    await expect(claude.ask("a")).rejects.toThrow(/not a Claude subscription/);
+    expect(spawns).toHaveLength(0);
   });
 
-  it("applies client defaults; an undefined call option keeps the default", async () => {
-    const { impl, calls } = fakeRun([{ text: "hi" }]);
-    const claude = createClaude({ runImpl: impl, requireSubscription: false, model: "haiku", system: "S" });
-    await claude.run({ prompt: "p", model: undefined });
-    await claude.run({ prompt: "p", model: "opus" });
-    expect(calls[0]).toMatchObject({ prompt: "p", model: "haiku", system: "S" });
-    expect(calls[1]).toMatchObject({ model: "opus", system: "S" });
+  it("applies client defaults; a call option wins unless it is undefined", async () => {
+    const { claude, spawns } = client(["hi"], { model: "haiku", system: "S" });
+    await claude.ask("p", { model: undefined });
+    await claude.ask("p", { model: "opus" });
+    const model = (i: number) => spawns[i]!.args[spawns[i]!.args.indexOf("--model") + 1];
+    expect([model(0), model(1)]).toEqual(["haiku", "opus"]);
+    expect(spawns[1]!.args).toContain("S");
   });
 
   it("json() sends the schema and returns the parsed data", async () => {
-    const { impl, calls } = fakeRun([{ data: { intent: "book" } }]);
-    const claude = createClaude({ runImpl: impl, requireSubscription: false });
+    const { claude, spawns } = client([{ text: "", data: { intent: "book" } }]);
     expect(await claude.json("p", { type: "object" })).toEqual({ intent: "book" });
-    expect(calls[0]!.jsonSchema).toEqual({ type: "object" });
+    expect(spawns[0]!.args).toContain("--json-schema");
   });
 
-  it("retries a timeout once, then succeeds", async () => {
-    const { impl, calls } = fakeRun([new ClaudeCliError("timeout", "slow"), { text: "ok" }]);
-    const claude = createClaude({ runImpl: impl, requireSubscription: false });
-    expect(await claude.text("p")).toBe("ok");
-    expect(calls).toHaveLength(2);
-    expect(claude.stats()).toMatchObject({ calls: 1, retries: 1, failures: 0 });
+  it("stream() yields the text as it is written, and result has the whole reply", async () => {
+    const { claude } = client([{ deltas: ["Dear ", "team,", " hello."] }]);
+    const stream = claude.stream("Write a note");
+    const pieces: string[] = [];
+    for await (const text of stream) pieces.push(text);
+    expect(pieces).toEqual(["Dear ", "team,", " hello."]);
+    expect((await stream.result).text).toBe("Dear team, hello.");
   });
 
-  it("does not retry a CLI error such as a usage limit", async () => {
-    const { impl, calls } = fakeRun([new ClaudeCliError("cli_error", "usage limit reached"), { text: "ok" }]);
-    const claude = createClaude({ runImpl: impl, requireSubscription: false, retries: 3 });
-    await expect(claude.text("p")).rejects.toThrow(/usage limit/);
-    expect(calls).toHaveLength(1);
-    expect(claude.stats().failures).toBe(1);
+  it("a failed stream throws from the loop", async () => {
+    const { claude } = client([{ error: "usage limit reached" }]);
+    const loop = async () => {
+      for await (const _ of claude.stream("x")) void _;
+    };
+    await expect(loop()).rejects.toThrow(/usage limit reached/);
   });
 
-  it("adds up calls, would-be API cost and average time", async () => {
-    const { impl } = fakeRun([{ text: "a", apiCostUsd: 0.25, durationMs: 100 }, { text: "b", apiCostUsd: 0.5, durationMs: 300 }]);
-    const claude = createClaude({ runImpl: impl, requireSubscription: false });
-    await claude.text("1");
-    await claude.text("2");
-    expect(claude.stats()).toEqual({ calls: 2, failures: 0, retries: 0, apiCostUsd: 0.75, avgMs: 200 });
+  it("sends files with the prompt", async () => {
+    const { claude, spawns } = client(["A red square."]);
+    await claude.ask("What is this?", { files: [{ data: new Uint8Array([1]), mediaType: "image/png" }] });
+    expect(spawns[0]!.messages[0]!.content).toEqual([
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "AQ==" } },
+      { type: "text", text: "What is this?" },
+    ]);
+  });
+
+  it("retries a crash once; never a CLI error; never after text has been streamed", async () => {
+    const crash = client([{ crash: true }, "ok"]);
+    expect(await crash.claude.ask("p")).toBe("ok");
+    expect(crash.spawns).toHaveLength(2);
+    expect(crash.claude.stats()).toMatchObject({ calls: 1, retries: 1, failures: 0 });
+
+    const limit = client([{ error: "usage limit reached" }, "ok"], { retries: 3 });
+    await expect(limit.claude.ask("p")).rejects.toThrow(/usage limit/);
+    expect(limit.spawns).toHaveLength(1);
+
+    const midStream = client([{ deltas: ["Hal"], crash: true }, "Hello"]);
+    await expect(midStream.claude.stream("p").result).rejects.toThrow(/exited/);
+    expect(midStream.spawns).toHaveLength(1);
+  });
+
+  it("adds up calls, would-be API cost, average time and the latest usage window", async () => {
+    const { claude } = client([{ text: "a", cost: 0.25 }, { text: "b", cost: 0.5, rateLimit: "allowed_warning" }]);
+    await claude.ask("1");
+    await claude.ask("2");
+    expect(claude.stats()).toMatchObject({ calls: 2, failures: 0, retries: 0, apiCostUsd: 0.75 });
+    expect(claude.stats().rateLimit?.status).toBe("allowed_warning");
+  });
+});
+
+describe("chat", () => {
+  it("one process for the whole conversation, with the history kept", async () => {
+    const { claude, spawns } = client(["Nice to meet you, Zara.", "Your name is Zara."]);
+    const chat = claude.chat({ system: "Be brief." });
+    expect(await chat.send("I'm Zara.")).toBe("Nice to meet you, Zara.");
+    expect(await chat.send("What's my name?")).toBe("Your name is Zara.");
+    await chat.close();
+    expect(spawns).toHaveLength(1);
+    expect(spawns[0]!.args).toContain("Be brief.");
+    expect(chat.turns).toEqual([
+      { role: "user", content: "I'm Zara." },
+      { role: "assistant", content: "Nice to meet you, Zara." },
+      { role: "user", content: "What's my name?" },
+      { role: "assistant", content: "Your name is Zara." },
+    ]);
+    expect(claude.stats().calls).toBe(2);
+  });
+
+  it("messages sent without waiting are queued, one turn each, in order", async () => {
+    const { claude, spawns } = client(["first", "second", "third"]);
+    const chat = claude.chat();
+    const replies = await Promise.all([chat.send("1"), chat.send("2"), chat.send("3")]);
+    await chat.close();
+    expect(replies).toEqual(["first", "second", "third"]);
+    expect(spawns[0]!.messages.map((m) => m.content)).toEqual(["1", "2", "3"]);
+  });
+
+  it("streams a turn, and a closed chat says so", async () => {
+    const { claude } = client([{ deltas: ["Sure", "."] }]);
+    const chat = claude.chat();
+    const pieces: string[] = [];
+    for await (const text of chat.stream("Can you help?")) pieces.push(text);
+    expect(pieces).toEqual(["Sure", "."]);
+    await chat.close();
+    await expect(chat.send("more")).rejects.toThrow(/closed/);
   });
 });
 

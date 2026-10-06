@@ -1,8 +1,8 @@
 {
-  "name": "claude-cli-evals",
-  "version": "0.1.0",
+  "name": "claude-local",
+  "version": "0.2.0",
   "private": true,
-  "description": "Run LLM calls for evals and tests through your signed-in Claude Code CLI (your Claude subscription) instead of an API key.",
+  "description": "Use your Claude subscription from Node.js on your own machine, through the signed-in Claude Code CLI: ask, stream, JSON, files, chat.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -10,10 +10,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./evals": {
+      "types": "./dist/evals/index.d.ts",
+      "default": "./dist/evals/index.js"
     }
   },
   "bin": {
-    "claude-cli-evals": "./dist/doctor.js"
+    "claude-local": "./dist/doctor.js"
   },
   "files": [
     "dist"

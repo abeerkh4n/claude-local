@@ -5,7 +5,7 @@
  *   npm run test:live
  */
 import { describe, expect, it } from "vitest";
-import { judge } from "../src/index.js";
+import { judge } from "../../src/evals/index.js";
 
 const live = process.env.CLAUDE_CLI_LIVE === "1";
 
