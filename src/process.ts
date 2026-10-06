@@ -7,6 +7,7 @@ import {
   ClaudeCliError,
   cliArgs,
   cliEnv,
+  DEFAULT_MODEL,
   DEFAULT_TIMEOUT_MS,
   type ChildLike,
   type ModelOptions,
@@ -226,7 +227,7 @@ export class CliProcess {
       data,
       apiCostUsd,
       durationMs: Date.now() - pending.started,
-      model: firstKey(r.modelUsage),
+      model: answeringModel(r.modelUsage, this.options.model),
       usage: readUsage(r.usage),
       rateLimit: this.rateLimit,
     });
@@ -293,9 +294,15 @@ function readUsage(raw: unknown): Usage {
   };
 }
 
-function firstKey(value: unknown): string | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  return Object.keys(value)[0];
+/**
+ * modelUsage can list a side model (a small Haiku call) next to the one that
+ * answered: prefer the model that was asked for, else the last one listed.
+ */
+export function answeringModel(modelUsage: unknown, requested: string | undefined): string | undefined {
+  if (typeof modelUsage !== "object" || modelUsage === null) return undefined;
+  const models = Object.keys(modelUsage);
+  const wanted = (requested || DEFAULT_MODEL).toLowerCase();
+  return models.find((m) => m.toLowerCase().includes(wanted)) ?? models.at(-1);
 }
 
 function num(value: unknown): number {

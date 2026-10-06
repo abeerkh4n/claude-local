@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { cliArgs, cliEnv } from "../src/cli.js";
 
 describe("cliEnv", () => {
-  it("drops API keys, other providers and the nested-session guard, keeps the rest", () => {
+  it("drops API keys, other providers and the nested-session guard, keeps the rest, turns off side calls", () => {
     const env = cliEnv({
       ANTHROPIC_API_KEY: "k",
       ANTHROPIC_AUTH_TOKEN: "t",
@@ -14,7 +14,7 @@ describe("cliEnv", () => {
       PATH: "/bin",
       HOME: "/h",
     });
-    expect(env).toEqual({ PATH: "/bin", HOME: "/h" });
+    expect(env).toEqual({ PATH: "/bin", HOME: "/h", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" });
   });
 });
 

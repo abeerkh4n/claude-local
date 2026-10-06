@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { ClaudeCliError } from "../src/cli.js";
-import { CliProcess, runOnce } from "../src/process.js";
+import { answeringModel, CliProcess, runOnce } from "../src/process.js";
 import { fakeCli } from "./helpers.js";
 
 const kindOf = async (p: Promise<unknown>) => ((await p.catch((e: unknown) => e)) as ClaudeCliError).kind;
@@ -19,7 +19,7 @@ describe("runOnce", () => {
     const s = spawns[0]!;
     expect(s.bin).toBe("claude");
     expect(s.messages).toEqual([{ role: "user", content: "P" }]);
-    expect(s.options.env).toEqual({ PATH: "/bin" });
+    expect(s.options.env).toEqual({ PATH: "/bin", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" });
     expect(readdirSync(s.options.cwd)).toEqual([]);
     expect(s.stdinEnded).toBe(true);
     expect(s.args).not.toContain("--include-partial-messages");
@@ -95,6 +95,19 @@ describe("runOnce", () => {
     const { impl, spawns } = fakeCli(["ok"]);
     expect(await kindOf(runOnce("P", { spawnImpl: impl, signal: AbortSignal.abort() }))).toBe("aborted");
     expect(spawns).toHaveLength(0);
+  });
+});
+
+describe("answeringModel", () => {
+  const usage = { "claude-haiku-4-5-20251001": {}, "claude-opus-5-5": {} };
+  it("picks the model that was asked for, not a side call listed first", () => {
+    expect(answeringModel(usage, "opus")).toBe("claude-opus-5-5");
+    expect(answeringModel(usage, "claude-opus-5-5")).toBe("claude-opus-5-5");
+    expect(answeringModel(usage, "haiku")).toBe("claude-haiku-4-5-20251001");
+  });
+  it("falls back to the last model listed", () => {
+    expect(answeringModel(usage, "sonnet")).toBe("claude-opus-5-5");
+    expect(answeringModel(undefined, "opus")).toBeUndefined();
   });
 });
 

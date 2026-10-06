@@ -120,10 +120,15 @@ export type SpawnLike = (
   options: { cwd: string; env: NodeJS.ProcessEnv; stdio: ["pipe", "pipe", "pipe"] },
 ) => ChildLike;
 
-/** The caller's environment minus anything that would bill an API key or block the CLI. */
+/**
+ * The caller's environment minus anything that would bill an API key or block
+ * the CLI. Non-essential traffic is switched off: since 2.1.2xx the CLI
+ * otherwise makes an extra ~900-token Haiku call alongside every request.
+ */
 export function cliEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const out = { ...env };
   for (const key of STRIPPED_ENV) delete out[key];
+  out.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
   return out;
 }
 
